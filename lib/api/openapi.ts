@@ -429,7 +429,7 @@ registry.registerPath({
         .optional()
         .openapi({
           param: { name: 'corridor', in: 'query' },
-          description: "Corridor id served by the anchor (default: first corridor)",
+          description: 'Corridor id served by the anchor (default: first corridor)',
         }),
       days: z
         .string()
@@ -455,7 +455,7 @@ registry.registerPath({
                 price: z.string(),
                 totalPrice: z.string(),
                 source: z.string(),
-              }),
+              })
             ),
           }),
         },

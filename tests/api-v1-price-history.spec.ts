@@ -73,10 +73,9 @@ describe('GET /api/v1/anchors/[id]/price-history', () => {
   });
 
   it('rejects a corridor the anchor does not serve with 400', async () => {
-    const res = await GET(
-      req('/api/v1/anchors/cowrie/price-history?corridor=usdc-xxx') as never,
-      { params: Promise.resolve({ id: 'cowrie' }) },
-    );
+    const res = await GET(req('/api/v1/anchors/cowrie/price-history?corridor=usdc-xxx') as never, {
+      params: Promise.resolve({ id: 'cowrie' }),
+    });
     expect(res.status).toBe(400);
   });
 
@@ -105,7 +104,7 @@ describe('GET /api/v1/anchors/[id]/price-history', () => {
         price: String(1000 + i),
         totalPrice: String(1000 + i),
         source: 'sep38',
-      })),
+      }))
     );
     const res = await GET(req('/api/v1/anchors/cowrie/price-history') as never, {
       params: Promise.resolve({ id: 'cowrie' }),
