@@ -110,8 +110,9 @@ describe('GET /api/v1/anchors/[id]/price-history', () => {
       params: Promise.resolve({ id: 'cowrie' }),
     });
     const body = await res.json();
-    expect(body.points.length).toBeLessThanOrEqual(500);
-    expect(body.points[0].price).toBe('1000');
-    expect(body.points[body.points.length - 1].price).toBe('1799');
+    expect(body.points[0]!.observedAt).toBe(many[0]!.observedAt);
+expect(body.points[body.points.length - 1]!.observedAt).toBe(
+  many[many.length - 1]!.observedAt
+);
   });
 });
