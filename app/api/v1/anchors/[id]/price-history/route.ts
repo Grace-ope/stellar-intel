@@ -82,7 +82,7 @@ export async function GET(
       if (!corridors.includes(corridor)) {
         return ctx.error(
           'VALIDATION_ERROR',
-          `Corridor "\( {corridor}" is not served by anchor " \){id}"`,
+          `Corridor "\( {corridor}" is not served by anchor " \){id}"`
           400
         );
       }
