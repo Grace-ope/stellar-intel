@@ -411,7 +411,26 @@ registry.registerPath({
     },
   },
 });
-
+registry.registerPath({
+  method: 'get',
+  path: '/api/v1/anchors/{id}/price-history',
+  summary: 'SEP-38 price history for an anchor corridor',
+  description:
+    'Returns recorded indicative prices. Optional corridor; days 1–90 (default 7). At most 500 points.',
+  request: {
+    params: z.object({ id: z.string().min(1) }),
+    query: z.object({
+      corridor: z.string().optional(),
+      days: z.coerce.number().int().min(1).max(90).optional(),
+    }),
+  },
+  responses: {
+    200: { description: 'Price history points' },
+    400: { description: 'Invalid corridor or days' },
+    404: { description: 'Unknown anchor' },
+    503: { description: 'Quote store unavailable' },
+  },
+});
 registry.registerPath({
   method: 'get',
   path: '/api/v1/anchors/{id}/price-history',
