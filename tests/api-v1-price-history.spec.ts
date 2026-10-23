@@ -1,9 +1,7 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-const queryQuotes = vi.fn();
 const getAnchorById = vi.fn();
 
-vi.mock('@/lib/sep38/quote-store', () => ({ queryQuotes }));
 vi.mock('@/lib/stellar/anchors', () => ({ getAnchorById }));
 
 vi.mock('@/lib/api/rate-limit', () => ({
@@ -17,6 +15,10 @@ vi.mock('@/lib/api/rate-limit', () => ({
 }));
 
 import { GET, downsamplePoints } from '@/app/api/v1/anchors/[id]/price-history/route';
+import {
+  recordQuote,
+  __resetQuoteStoreForTests,
+} from '@/lib/sep38/quote-store';
 
 function req(path: string) {
   return new Request(`http://localhost${path}`, {
@@ -40,25 +42,35 @@ describe('downsamplePoints', () => {
 
 describe('GET /api/v1/anchors/[id]/price-history', () => {
   beforeEach(() => {
+    __resetQuoteStoreForTests();
     vi.clearAllMocks();
+    delete (globalThis as { __QUOTE_STORE_DOWN?: boolean }).__QUOTE_STORE_DOWN;
+
     getAnchorById.mockReturnValue({
       id: 'cowrie',
       corridors: ['usdc-ngn', 'usdc-kes'],
     });
-    queryQuotes.mockResolvedValue([
-      {
-        observedAt: '2026-01-01T00:00:00.000Z',
-        price: '1500',
-        totalPrice: '1500',
-        source: 'sep38',
-      },
-      {
-        observedAt: '2026-01-02T00:00:00.000Z',
-        price: '1510',
-        totalPrice: '1510',
-        source: 'sep38',
-      },
-    ]);
+
+    recordQuote({
+      anchorId: 'cowrie',
+      corridor: 'usdc-ngn',
+      observedAt: '2026-01-01T00:00:00.000Z',
+      price: '1500',
+      totalPrice: '1500',
+      source: 'sep38',
+    });
+    recordQuote({
+      anchorId: 'cowrie',
+      corridor: 'usdc-ngn',
+      observedAt: '2026-01-02T00:00:00.000Z',
+      price: '1510',
+      totalPrice: '1510',
+      source: 'sep38',
+    });
+  });
+
+  afterEach(() => {
+    delete (globalThis as { __QUOTE_STORE_DOWN?: boolean }).__QUOTE_STORE_DOWN;
   });
 
   it('returns points for a known anchor', async () => {
@@ -70,12 +82,19 @@ describe('GET /api/v1/anchors/[id]/price-history', () => {
     expect(body.anchorId).toBe('cowrie');
     expect(body.corridor).toBe('usdc-ngn');
     expect(body.points.length).toBe(2);
+    expect(body.points[0]).toMatchObject({
+      observedAt: '2026-01-01T00:00:00.000Z',
+      price: '1500',
+      totalPrice: '1500',
+      source: 'sep38',
+    });
   });
 
   it('rejects a corridor the anchor does not serve with 400', async () => {
-    const res = await GET(req('/api/v1/anchors/cowrie/price-history?corridor=usdc-xxx') as never, {
-      params: Promise.resolve({ id: 'cowrie' }),
-    });
+    const res = await GET(
+      req('/api/v1/anchors/cowrie/price-history?corridor=usdc-xxx') as never,
+      { params: Promise.resolve({ id: 'cowrie' }) }
+    );
     expect(res.status).toBe(400);
   });
 
@@ -90,29 +109,36 @@ describe('GET /api/v1/anchors/[id]/price-history', () => {
   });
 
   it('returns 503 when store is unavailable', async () => {
-    queryQuotes.mockRejectedValue(new Error('db down'));
+    (globalThis as { __QUOTE_STORE_DOWN?: boolean }).__QUOTE_STORE_DOWN = true;
     const res = await GET(req('/api/v1/anchors/cowrie/price-history') as never, {
       params: Promise.resolve({ id: 'cowrie' }),
     });
     expect(res.status).toBe(503);
   });
 
-  it('downsamples to at most 500 points', async () => {
-    queryQuotes.mockResolvedValue(
-      Array.from({ length: 800 }, (_, i) => ({
-        observedAt: new Date(Date.UTC(2026, 0, 1) + i * 60_000).toISOString(),
-        price: String(1000 + i),
-        totalPrice: String(1000 + i),
-        source: 'sep38',
-      }))
-    );
+  it('downsamples to at most 500 points and keeps first and last', async () => {
+    __resetQuoteStoreForTests();
+    const many = Array.from({ length: 800 }, (_, i) => ({
+      anchorId: 'cowrie',
+      corridor: 'usdc-ngn',
+      observedAt: new Date(Date.UTC(2026, 0, 1) + i * 60_000).toISOString(),
+      price: String(1000 + i),
+      totalPrice: String(1000 + i),
+      source: 'sep38',
+    }));
+    for (const row of many) {
+      recordQuote(row);
+    }
+
     const res = await GET(req('/api/v1/anchors/cowrie/price-history') as never, {
       params: Promise.resolve({ id: 'cowrie' }),
     });
+    expect(res.status).toBe(200);
     const body = await res.json();
+    expect(body.points.length).toBeLessThanOrEqual(500);
     expect(body.points[0]!.observedAt).toBe(many[0]!.observedAt);
-expect(body.points[body.points.length - 1]!.observedAt).toBe(
-  many[many.length - 1]!.observedAt
-);
+    expect(body.points[body.points.length - 1]!.observedAt).toBe(
+      many[many.length - 1]!.observedAt
+    );
   });
 });
