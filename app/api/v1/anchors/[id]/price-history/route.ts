@@ -1,8 +1,7 @@
 import type { NextRequest, NextResponse } from 'next/server';
 import { withV1 } from '@/lib/api/v1';
+import { tryGetReputationStore } from '@/lib/reputation/store';
 import { getAnchorById } from '@/lib/stellar/anchors';
-// Adjust this import to the module that exports queryQuotes (Q38012).
-import { queryQuotes } from '@/lib/sep38/quote-store';
 
 export const runtime = 'nodejs';
 
@@ -10,6 +9,7 @@ const MAX_POINTS = 500;
 const DEFAULT_DAYS = 7;
 const MIN_DAYS = 1;
 const MAX_DAYS = 90;
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 export interface PriceHistoryPoint {
   observedAt: string;
@@ -24,21 +24,11 @@ export interface PriceHistoryPoint {
 export function downsamplePoints<T>(points: T[], max: number): T[] {
   if (points.length <= max) return points;
   if (max <= 1) return points.length ? [points[points.length - 1]!] : [];
-  if (max === 2) return [points[0]!, points[points.length - 1]!];
 
-  const result: T[] = [];
   const lastIndex = points.length - 1;
+  const result: T[] = [];
   for (let i = 0; i < max; i++) {
-    const idx = i === max - 1 ? lastIndex : Math.round((i * lastIndex) / (max - 1));
-    const point = points[idx]!;
-    if (result.length === 0 || result[result.length - 1] !== point) {
-      result.push(point);
-    }
-  }
-  // Guarantee first/last
-  if (result[0] !== points[0]) result[0] = points[0]!;
-  if (result[result.length - 1] !== points[lastIndex]) {
-    result[result.length - 1] = points[lastIndex]!;
+    result.push(points[Math.round((i * lastIndex) / (max - 1))]!);
   }
   return result;
 }
@@ -49,86 +39,73 @@ export async function GET(
 ): Promise<NextResponse> {
   return withV1(request, { bucket: 'v1.anchor.price-history', maxRequests: 60 }, async (ctx) => {
     const { id } = await params;
-    if (!id?.trim()) {
-      return ctx.error('VALIDATION_ERROR', 'Invalid anchor ID', 400);
-    }
 
     let anchor;
     try {
       anchor = getAnchorById(id);
     } catch {
-      return ctx.error('NOT_FOUND', `Unknown anchor: "${id}"`, 404);
+      return ctx.error('not_found', `Unknown anchor: "${id}"`, 404);
     }
 
-    const url = new URL(request.url);
-    const corridorParam = url.searchParams.get('corridor') ?? undefined;
-    const daysRaw = url.searchParams.get('days');
+    const query = new URL(request.url).searchParams;
+
     let days = DEFAULT_DAYS;
-    if (daysRaw != null && daysRaw !== '') {
-      const n = Number.parseInt(daysRaw, 10);
-      if (!Number.isFinite(n) || n < MIN_DAYS || n > MAX_DAYS) {
+    const daysRaw = query.get('days');
+    if (daysRaw !== null && daysRaw !== '') {
+      const parsed = Number(daysRaw);
+      if (!Number.isInteger(parsed) || parsed < MIN_DAYS || parsed > MAX_DAYS) {
         return ctx.error(
-          'VALIDATION_ERROR',
+          'validation_error',
           `days must be an integer between ${MIN_DAYS} and ${MAX_DAYS}`,
           400
         );
       }
-      days = n;
+      days = parsed;
     }
 
-    const corridors = anchor.corridors ?? [];
-    let corridor = corridorParam;
-    if (corridor != null && corridor !== '') {
-      return NextResponse.json(
-  { error: `Corridor "${corridor}" is not served by anchor "${id}"` },
-  { status: 400 }
-);
-      }
-    } else {
-      corridor = corridors[0];
-      if (!corridor) {
-        return ctx.error('VALIDATION_ERROR', `Anchor "${id}" has no corridors`, 400);
-      }
+    const corridorParam = query.get('corridor');
+    const corridor = corridorParam || anchor.corridors[0];
+    if (!corridor) {
+      return ctx.error('validation_error', `Anchor "${id}" has no corridors`, 400);
+    }
+    if (!anchor.corridors.includes(corridor)) {
+      return ctx.error(
+        'validation_error',
+        `Corridor "${corridor}" is not served by anchor "${id}"`,
+        400
+      );
     }
 
-    const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+    const store = tryGetReputationStore();
+    if (!store) {
+      return ctx.error('store_unavailable', 'Quote history store is not available', 503);
+    }
 
-    let rows: Array<{
-      observedAt: string;
-      price: string;
-      totalPrice: string;
-      source: string;
-    }>;
+    let rows;
     try {
-      // Signature may vary — map fields if your queryQuotes returns differently.
-      rows = await queryQuotes({
+      rows = await store.queryQuotes({
         anchorId: id,
         corridor,
-        since,
+        since: new Date(Date.now() - days * DAY_MS),
       });
     } catch {
-      return ctx.error('STORE_UNAVAILABLE', 'Quote store unavailable', 503);
+      return ctx.error('store_unavailable', 'Quote history store is not available', 503);
     }
 
-    if (!Array.isArray(rows)) {
-      return ctx.error('STORE_UNAVAILABLE', 'Quote store unavailable', 503);
-    }
-
-    const sorted = [...rows].sort((a, b) =>
-      a.observedAt < b.observedAt ? -1 : a.observedAt > b.observedAt ? 1 : 0
+    const points: PriceHistoryPoint[] = downsamplePoints(
+      rows.map((r) => ({
+        observedAt: r.observedAt,
+        price: r.price,
+        totalPrice: r.totalPrice,
+        source: r.source,
+      })),
+      MAX_POINTS
     );
-    const points = downsamplePoints(sorted, MAX_POINTS);
 
     return {
       status: 200,
-      body: {
-        anchorId: id,
-        corridor,
-        points,
-      },
-      headers: {
-        'Cache-Control': 'public, max-age=60, stale-while-revalidate=300',
-      },
+      body: { anchorId: id, corridor, points },
+      headers: { 'Cache-Control': 'public, max-age=60, stale-while-revalidate=300' },
     };
   });
 }
