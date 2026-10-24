@@ -79,12 +79,10 @@ export async function GET(
     const corridors = anchor.corridors ?? [];
     let corridor = corridorParam;
     if (corridor != null && corridor !== '') {
-      if (!corridors.includes(corridor)) {
-        return ctx.error(
-          'VALIDATION_ERROR',
-          `Corridor "\( {corridor}" is not served by anchor " \){id}"`,
-          400
-        );
+      return NextResponse.json(
+  { error: `Corridor "${corridor}" is not served by anchor "${id}"` },
+  { status: 400 }
+);
       }
     } else {
       corridor = corridors[0];
