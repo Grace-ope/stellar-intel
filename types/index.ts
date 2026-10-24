@@ -390,7 +390,8 @@ export interface Sep24WithdrawResponse {
 export interface Sep24DepositRequest {
   assetCode: string;
   assetIssuer: string;
-  amount: string;
+  /** Asset units to deposit. Omit to let the anchor's interactive flow collect it. */
+  amount?: string | undefined;
   account: string; // user's Stellar public key, credited on deposit completion
   jwt: string;
 }
